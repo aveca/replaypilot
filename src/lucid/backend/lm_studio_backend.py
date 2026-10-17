@@ -301,6 +301,24 @@ def _to_openai_message(msg: Message) -> list[dict[str, Any]]:
             btype = block.get("type")
             if btype == "text":
                 content_parts.append({"type": "text", "text": block.get("text", "")})
+            elif btype == "image_url":
+                # Already in OpenAI shape, which is what this provider's own
+                # image_block() returns. Forward it untouched.
+                #
+                # Before this branch existed, image_block() produced
+                # {"type": "image_url", ...} while the loop below only matched
+                # the Anthropic shape {"type": "image", "source": {...}}. The
+                # block matched neither branch and was dropped without a
+                # warning, so every screenshot silently vanished from the
+                # request and vision models were asked to answer blind. A
+                # vision-capable model then answers "I cannot see" while the
+                # same request built by hand works fine.
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": block.get("image_url", {}),
+                    }
+                )
             elif btype == "image":
                 src = block.get("source", {})
                 data = src.get("data", "")
