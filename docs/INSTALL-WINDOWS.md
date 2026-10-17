@@ -97,18 +97,33 @@ Measured on this machine (31.6 GB RAM, 13.7 GB free at the time):
 
 | Model | Size | Vision | Tools | Verdict |
 |---|---|---|---|---|
-| `qwen2.5-coder:7b` | 4.7 GB | no | no | text work only |
-| `llama3:8b` | 4.7 GB | no | HTTP 400 on `tools` | unusable for Execute |
-| `qwen2.5-coder:32k` | 4.7 GB | no | no | same family as above |
-| `qwen2.5-coder-7b-16k` | 4.7 GB | no | no | same model, longer context |
-| `qwen3-coder:30b` | 18 GB | no | untested | **impractical**: 18 GB model vs 13.7 GB free |
-| `qwen3.6:latest` | 23 GB | no | untested | **impractical**: same reason |
+| `qwen2.5vl:3b` | 3.2 GB | **yes** — answered `Blue` | no — `does not support tools` | Answer/Teach vision |
+| `llama3.1:8b` | 4.7 GB | no | **yes** — emitted `action: screenshot` | tool calling works |
+| `qwen3:4b` | 2.5 GB | no | no | unusable for Execute |
+| `qwen2.5-coder:7b` | 4.7 GB | no | no — prose only | text work |
+| `llama3:8b` | 4.7 GB | no | no — HTTP 400 | unusable |
+| `qwen3-coder:30b` | 18 GB | untested | untested | **impractical**: 18 GB vs 13.7 GB free |
+| `qwen3.6:latest` | 23 GB | untested | untested | **impractical**: same |
 
-**Consequence.** Execute mode (the model driving the mouse and keyboard) needs
-*both* image input and OpenAI function calling. No installed model provided
-both. Use a coder model for Answer/Teach text work, and install a small vision
-model before expecting vision behaviour. Keep it small: a 3B vision model fits
-comfortably; a 30B model does not fit this machine's free memory.
+**Consequence.** Vision and tool calling were each found, but in *different*
+models. Execute mode needs both at once, because `agent/execute_mode.py`
+attaches a screenshot on every turn regardless of `capture.mode`. On this
+machine no single small model provides both.
+
+Suggested split while that stands:
+
+```yaml
+provider: lm_studio
+model: qwen2.5vl:3b          # vision, for Answer/Teach
+execute_model: llama3.1:8b   # tools, for Execute
+backend:
+  mode: lm_studio
+  lm_studio_url: http://localhost:11434/v1
+  lm_studio_model: qwen2.5vl:3b
+```
+
+Keep models small: a 3B or 8B model fits comfortably, an 18B model does not fit
+this machine's free memory.
 
 ---
 
