@@ -422,11 +422,20 @@ def raise_window(win: AuthorizedWindow, attempts: int = 4) -> None:
 # Guarded session
 # --------------------------------------------------------------------------
 
+# Every Lucid action that emits keyboard or mouse input. This list is derived
+# from the dispatch table in src/lucid/executor/actions.py::Actions.run -- if
+# a new input action is added there, it must be added here or the guard will
+# wrongly treat it as harmless.
+#
+# The easily-missed members are the semantic ones: click_element and
+# scroll_into_view move the real mouse, file_dialog_paste types a path, and
+# solve_captcha both clicks and types. Treating any of them as "read only"
+# would be a hole in the guard.
 _INPUT_ACTION_NAMES = {
-    "type",
-    "key",
-    "hold_key",
-    "click",
+    # direct pointer
+    "mouse_move",
+    "cursor_position",
+    "move",
     "left_click",
     "right_click",
     "middle_click",
@@ -434,10 +443,25 @@ _INPUT_ACTION_NAMES = {
     "triple_click",
     "left_click_drag",
     "scroll",
+    # keyboard
+    "type",
+    "key",
+    "hold_key",
+    # semantic, but still emit real input
+    "click_element",
     "scroll_into_view",
-    "move",
-    "mouse_move",
-    "cursor_position",
+    "file_dialog_paste",
+    "solve_captcha",
+}
+
+# Actions that read the desktop or the shell without emitting input.
+_READONLY_ACTION_NAMES = {
+    "wait",
+    "screenshot",
+    "screenshot_to_clipboard",
+    "focus_window",
+    "focus_monitor",
+    "run_shell",
 }
 
 

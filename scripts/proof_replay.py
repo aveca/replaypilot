@@ -41,6 +41,20 @@ APP_TITLE = "ReplayPilot Test App"
 EXPECTED = "REPLAYPROOF-7741"
 
 
+def consent_gate() -> bool:
+    """Refuse to run unless the user explicitly allowed focus stealing."""
+    if os.environ.get("REPLAYPILOT_ALLOW_INPUT") == "1":
+        return True
+    print(
+        "REFUSED: this test raises a window to the foreground and types in it.\n"
+        "When you are ready to let it take focus for about two minutes, run:\n"
+        "\n"
+        "    REPLAYPILOT_ALLOW_INPUT=1 .venv\\Scripts\\python.exe scripts\\proof_replay.py\n",
+        flush=True,
+    )
+    return False
+
+
 def record(name: str, status: str, detail: str = "") -> bool:
     RESULTS.append((name, status, detail))
     print(f"[{status:4}] {name}" + (f" -- {detail}" if detail else ""))
@@ -68,6 +82,9 @@ def wait_for_state(predicate, timeout: float = 20.0) -> dict:
 
 
 def main() -> int:
+    if not consent_gate():
+        return 2
+
     from lucid.config.settings import get_settings
     from lucid.executor.actions import Actions
     from lucid.llm.schemas import ActionBlock
@@ -163,6 +180,10 @@ def main() -> int:
             ],
         )
         WORKFLOWS.mkdir(parents=True, exist_ok=True)
+        # Workflow.save() never overwrites: it appends -1, -2, ... to the slug.
+        # Clear prior proofs so the slug stays stable and the run is repeatable.
+        for stale in WORKFLOWS.glob("fill_test_form*.json"):
+            stale.unlink()
         wf_path = wf.save(WORKFLOWS)
         record("2. workflow recorded + saved", "PASS", str(wf_path.relative_to(ROOT)))
 
