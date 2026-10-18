@@ -154,6 +154,15 @@ def _read_pid(hwnd: int) -> int:
     return int(win32process.GetWindowThreadProcessId(hwnd)[1])
 
 
+def _read_rect(hwnd: int) -> tuple[int, int, int, int] | None:
+    import win32gui
+
+    try:
+        return tuple(win32gui.GetWindowRect(hwnd))
+    except Exception:
+        return None
+
+
 def _read_process(pid: int) -> str:
     """Lower-case process name for a PID, without the .exe extension.
 
@@ -199,6 +208,7 @@ _READERS: dict[str, object] = {
     "title": _read_title,
     "pid": _read_pid,
     "process": _read_process,
+    "rect": _read_rect,
 }
 
 
@@ -269,6 +279,7 @@ class AuthorizedWindow:
     pid: int
     title: str
     process: str
+    bounds: tuple[int, int, int, int] | None = None
 
     def describe(self) -> str:
         return f"hwnd={self.hwnd} pid={self.pid} title={self.title!r} process={self.process!r}"
@@ -291,6 +302,7 @@ def find_window(title_substring: str, *, expected_pid: int | None = None) -> Aut
     title_of = _READERS["title"]
     pid_of = _READERS["pid"]
     proc_of = _READERS["process"]
+    rect_of = _READERS["rect"]
 
     matches: list[AuthorizedWindow] = []
 
@@ -307,6 +319,7 @@ def find_window(title_substring: str, *, expected_pid: int | None = None) -> Aut
                 pid=pid,
                 title=title,
                 process=str(proc_of(pid)),  # type: ignore[operator]
+                bounds=rect_of(hwnd),  # type: ignore[operator]
             )
         )
         return True
@@ -510,6 +523,46 @@ class GuardedSession:
             )
         return snap
 
+    def assert_coordinates_inside(self, params: dict, phase: str = "") -> None:
+        """Raise if a coordinate in ``params`` falls outside the window bounds.
+
+        Measured during validation: the execute model, asked to drive a small
+        test window, opened with a pixel click at (1434, 1057) -- a point on
+        the user's desktop, nowhere near the target -- with a fabricated
+        "FALLBACK:" reason. Focus checks alone do not stop that: the
+        authorized window would still be in front when the click fires, and
+        the click would land wherever that coordinate points.
+
+        A coordinate is only acceptable when it lies inside the authorized
+        window's rectangle. Anything else is refused before emission.
+        """
+        rect = self.window.bounds
+        if not rect:
+            return
+        left, top, right, bottom = rect
+        for key in ("coordinate", "start_coordinate", "end_coordinate"):
+            value = params.get(key)
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                if value is not None:
+                    raise FocusViolation(
+                        f"REFUSING TO TYPE ({phase}): {key} is not a coordinate "
+                        f"pair: {value!r}. Automation halted."
+                    )
+                continue
+            try:
+                x, y = int(value[0]), int(value[1])
+            except (TypeError, ValueError):
+                raise FocusViolation(
+                    f"REFUSING TO TYPE ({phase}): {key} is not two integers: "
+                    f"{value!r}. Automation halted."
+                )
+            if not (left <= x <= right and top <= y <= bottom):
+                raise FocusViolation(
+                    f"REFUSING TO TYPE ({phase}): {key}=({x}, {y}) is outside "
+                    f"the authorized window bounds {rect} "
+                    f"({self.window.describe()}). Automation halted."
+                )
+
     def prepare(self) -> GuardedSession:
         """Raise the authorized window and confirm it owns the foreground."""
         raise_window(self.window)
@@ -538,6 +591,8 @@ class GuardedSession:
                 f"SIMULATION: input is disabled, refused to emit {action_name!r}. "
                 f"Guard checks passed for {self.window.describe()}."
             )
+
+        self.assert_coordinates_inside(params, f"before {action_name}")
 
         result = action(**params)
         self.emitted += 1

@@ -146,6 +146,11 @@ class LMStudioProvider(LLMProvider):
 
         # Accumulate tool-call chunks since OpenAI streams them piecewise.
         pending_tool_calls: dict[int, dict[str, Any]] = {}
+        # The model sometimes answers with the action as JSON *in the content*
+        # instead of using the native tool_calls channel. Collect the text so
+        # the end-of-stream normaliser can recover it (see _normalise_text).
+        text_parts: list[str] = []
+        emitted_tool_use = False
 
         try:
             for chunk in stream:
@@ -159,6 +164,7 @@ class LMStudioProvider(LLMProvider):
 
                 text_delta = getattr(delta, "content", None)
                 if text_delta:
+                    text_parts.append(text_delta)
                     yield StreamEvent(kind="text_delta", text=text_delta)
 
                 tcs = getattr(delta, "tool_calls", None) or []
@@ -187,9 +193,17 @@ class LMStudioProvider(LLMProvider):
                             if isinstance(coord, (list, tuple)) and len(coord) == 2
                             else None
                         )
+                        # The action usually lives in the arguments, but some
+                        # models put it in the function name instead, or omit
+                        # it entirely. Recorded during validation: tool_calls
+                        # like {"element_name": "Submit"} with no "action" key
+                        # produced ComputerUseBlock(action=""), which the
+                        # executor silently ignores. Fall back to the function
+                        # name so the action is not lost.
+                        action = str(args.get("action") or slot.get("name") or "")
                         block = ComputerUseBlock(
                             id=slot["id"] or f"lmstudio-{id(slot)}",
-                            action=str(args.get("action", "")),
+                            action=action,
                             coordinate=coord_tuple,
                             text=args.get("text"),
                             keys=args.get("keys"),
@@ -199,7 +213,22 @@ class LMStudioProvider(LLMProvider):
                             raw={"input": args},
                         )
                         yield StreamEvent(kind="tool_use", tool_use=block)
+                        emitted_tool_use = True
                     pending_tool_calls.clear()
+                    if finish == "stop" and not emitted_tool_use and text_parts:
+                        # The model chose prose over the native tool channel.
+                        # Recover a well-formed action from it rather than
+                        # throwing the turn away, which is what used to happen:
+                        # the executor saw "no action emitted" and nudged, and
+                        # with a large accessibility tree llama3.1:8b did this
+                        # on every turn until the nudge budget ran out.
+                        recovered = _normalise_text_action("".join(text_parts))
+                        if recovered is not None:
+                            log.info(
+                                "recovered a tool_use from text content "
+                                "(native tool_calls absent)"
+                            )
+                            yield StreamEvent(kind="tool_use", tool_use=recovered)
                     yield StreamEvent(kind="done", stop_reason=finish)
         except Exception as exc:
             log.exception("LM Studio stream error: %s", exc)
@@ -371,3 +400,131 @@ def _to_openai_tool(anthropic_tool: dict[str, Any]) -> dict[str, Any]:
             "parameters": anthropic_tool.get("input_schema", {"type": "object"}),
         },
     }
+
+# Accepted aliases for the action name when a model writes the action in prose
+# instead of using the native tool_calls channel.
+_NAME_KEYS = ("name", "action")
+
+
+def _extract_json_object(text: str) -> "dict[str, Any] | None":
+    """First JSON object found in ``text``, or None.
+
+    Tolerates prose and markdown fences around the object, which is common
+    once a large context nudges a model off the tool channel.
+    """
+    candidate = (text or "").strip()
+    if candidate.startswith("```"):
+        candidate = candidate.strip("`")
+        if candidate.lower().startswith("json"):
+            candidate = candidate[4:]
+        candidate = candidate.strip()
+    try:
+        parsed = json.loads(candidate)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(candidate[start : end + 1])
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _parse_key_list(raw: str) -> list[str]:
+    """Parse a keys value the model may have written several ways.
+
+    Observed shapes: "['ctrl','l']" (Python literal), '["ctrl","l"]' (JSON),
+    "ctrl+a" (joined). Returns [] for anything unparseable.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        # json.loads rejects the single-quoted Python literal the model emits,
+        # so normalise quotes first. Measured: "['ctrl','l']".
+        candidate = text.replace("'", '"')
+        try:
+            decoded = json.loads(candidate)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(decoded, list):
+            return [str(k).strip() for k in decoded if str(k).strip()]
+        return []
+    if " " in text:
+        # A real key name has no space; "hello world" is prose, not a chord.
+        return []
+    return [k.strip() for k in text.split("+") if k.strip()]
+
+
+def _normalise_text_action(text: str) -> "ComputerUseBlock | None":
+    """Turn a JSON action the model wrote in prose into a tool_use block.
+
+    Accepts ``{"name": "click_element", "parameters": {...}}`` and the flatter
+    ``{"action": "click_element", "element_name": "..."}``. Returns None for
+    anything that is not unmistakably one action, so ordinary prose, lists and
+    partial JSON never become a desktop action.
+
+    Only called when the model emitted no native tool_calls, so this cannot
+    shadow a well-formed tool call.
+    """
+    parsed = _extract_json_object(text)
+    if not parsed:
+        return None
+
+    name = ""
+    for key in _NAME_KEYS:
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            name = value.strip()
+            break
+    if not name:
+        return None
+
+    inner = parsed.get("parameters")
+    if isinstance(inner, dict):
+        params: dict[str, Any] = dict(inner)
+    else:
+        params = {k: v for k, v in parsed.items() if k not in _NAME_KEYS}
+
+    # The action is already named at the top level; a second action key inside
+    # the parameters would be contradictory.
+    params.pop("action", None)
+
+    # Models frequently stringify the coordinate pair: "[462, 277]".
+    coord = params.get("coordinate")
+    if isinstance(coord, str):
+        try:
+            decoded = json.loads(coord)
+            if isinstance(decoded, list) and len(decoded) == 2:
+                params["coordinate"] = decoded
+            else:
+                params.pop("coordinate", None)
+        except json.JSONDecodeError:
+            params.pop("coordinate", None)
+    coord_tuple = None
+    if isinstance(params.get("coordinate"), (list, tuple)) and len(params["coordinate"]) == 2:
+        coord_tuple = (int(params["coordinate"][0]), int(params["coordinate"][1]))
+
+    keys = params.get("keys")
+    if isinstance(keys, str):
+        cleaned = _parse_key_list(keys)
+        if cleaned:
+            params["keys"] = cleaned
+        else:
+            params.pop("keys", None)
+
+    return ComputerUseBlock(
+        id="lmstudio-text-recovery",
+        action=name,
+        coordinate=coord_tuple,
+        text=params.get("text"),
+        keys=params.get("keys"),
+        duration_ms=params.get("duration_ms"),
+        scroll_direction=params.get("scroll_direction"),
+        scroll_amount=params.get("scroll_amount"),
+        raw={"input": params, "_recovered_from_text": True},
+    )

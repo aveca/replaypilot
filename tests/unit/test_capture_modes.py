@@ -59,7 +59,9 @@ def grabber_stub(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr("lucid.capture.ActiveWindow", _FakeActive)
     monkeypatch.setattr("lucid.capture.list_windows", lambda: [])
     monkeypatch.setattr("lucid.capture._enumerate_monitors", lambda active_index: [])
-    monkeypatch.setattr("lucid.capture.capture_a11y_tree", lambda: {"name": "root"})
+    monkeypatch.setattr(
+        "lucid.capture.capture_a11y_tree", lambda hwnd=None: {"name": "root"}
+    )
     return state
 
 
@@ -67,6 +69,8 @@ class _FakeActive:
     def __init__(self) -> None:
         self.title = "Test Window"
         self.process = "test.exe"
+        self.hwnd = 99999
+        self.pid = 1234
 
     @classmethod
     def current(cls) -> "_FakeActive":
@@ -99,7 +103,7 @@ def test_hybrid_with_substantial_a11y_skips_screenshot(
     grabber_stub: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     big_tree = {"name": "x" * 250}
-    monkeypatch.setattr("lucid.capture.capture_a11y_tree", lambda: big_tree)
+    monkeypatch.setattr("lucid.capture.capture_a11y_tree", lambda hwnd=None: big_tree)
     snap = ContextSnapshot.capture(_settings(capture_mode="hybrid"))
     assert grabber_stub["grab_calls"] == 0
     assert snap.image.size == (1, 1)
@@ -116,7 +120,7 @@ def test_hybrid_force_screenshot_overrides_a11y_check(
     grabber_stub: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     big_tree = {"name": "x" * 250}
-    monkeypatch.setattr("lucid.capture.capture_a11y_tree", lambda: big_tree)
+    monkeypatch.setattr("lucid.capture.capture_a11y_tree", lambda hwnd=None: big_tree)
     snap = ContextSnapshot.capture(_settings(capture_mode="hybrid"), force_screenshot=True)
     assert grabber_stub["grab_calls"] == 1
     assert snap.image.size == (200, 100)

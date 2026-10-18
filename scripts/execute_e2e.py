@@ -123,6 +123,14 @@ def main() -> int:
     if not consent_gate():
         return 2
 
+    # The model's transcript can contain any Unicode. The Windows console here
+    # is cp1252 and a single unencodable character killed the whole run after
+    # it had already worked. Reconfigure rather than crash on a glyph.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     from lucid.agent.execute_mode import ExecuteMode
     from lucid.config.settings import get_settings
     from lucid.executor.actions import Actions

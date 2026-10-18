@@ -16,16 +16,27 @@ except ImportError:
 
 if sys.platform == "win32":
     try:
-        import psutil
         import win32gui
         import win32process
     except ImportError:
         win32gui = None  # type: ignore[assignment]
         win32process = None  # type: ignore[assignment]
-        psutil = None  # type: ignore[assignment]
 else:
     win32gui = None  # type: ignore[assignment]
     win32process = None  # type: ignore[assignment]
+
+# psutil is optional and NOT declared in pyproject.toml. It only supplies a
+# friendlier process name; everything else works without it.
+#
+# It must NOT share a try block with win32gui: a missing psutil used to blank
+# win32gui as well, so ActiveWindow.current() returned None on every call,
+# ContextSnapshot saw no active window, and the accessibility tree fell back
+# to the whole desktop. The model was then shown every visible application's
+# controls -- including a game and the user's browser -- and asked for clicks
+# on them. One missing optional package silently disabled window scoping.
+try:
+    import psutil
+except ImportError:
     psutil = None  # type: ignore[assignment]
 
 

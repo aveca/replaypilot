@@ -83,7 +83,27 @@ class ContextSnapshot:
                 a11y_tree=None,
             )
 
-        a11y = capture_a11y_tree() if settings.capture_a11y else None
+        # Scope the accessibility tree to the active window, not the whole
+        # desktop. capture_a11y_tree() accepts an hwnd for exactly this, but it
+        # used to be called without one, so GetFocusedControl() fell back to
+        # GetRootControl() and the tree contained every visible application.
+        #
+        # That is a safety problem, not just noise: the model can only ask for
+        # clicks on elements it has been shown. Measured during validation —
+        # with a desktop-wide tree and the user's browser in the foreground,
+        # the model requested clicks on the browser's video player controls
+        # ("Pause (k)", "Disable sound (m)", "Volume") while trying to obey a
+        # goal aimed at a different window. A desktop-wide tree hands it those
+        # targets; a window-scoped tree never does.
+        #
+        # If the active window cannot be identified, the tree stays empty
+        # rather than falling back to the desktop: not knowing what is in
+        # front is a reason to show the model less, not more.
+        a11y = (
+            capture_a11y_tree(hwnd=active.hwnd)
+            if settings.capture_a11y and active is not None
+            else None
+        )
 
         take_screenshot = True
         if cheap or mode == "a11y_only":
