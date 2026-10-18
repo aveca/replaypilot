@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReplayPilot — record once, replay reliably. Runs locally.</title>
+<meta name="description" content="A Windows desktop agent that records a task once and replays it with semantic steps. Runs on local models. Nothing leaves your machine.">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+  header{border-bottom:1px solid var(--line);padding:18px 0}
+  header .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .brand{font-weight:700;font-size:18px;letter-spacing:.2px}
+  .brand span{color:var(--accent)}
+  nav a{color:var(--muted);text-decoration:none;margin-left:22px;font-size:15px}
+  nav a:hover{color:var(--text)}
+  .hero{padding:72px 0 56px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:44px;line-height:1.15;letter-spacing:-.5px;max-width:760px}
+  .hero h1 em{font-style:normal;color:var(--accent)}
+  .hero p.lede{color:var(--muted);font-size:19px;max-width:680px;margin-top:18px}
+  .cta{margin-top:32px;display:flex;gap:14px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;border:1px solid var(--line)}
+  .btn.primary{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+  .btn.ghost{color:var(--text)}
+  .btn.ghost:hover{border-color:var(--muted)}
+  .badges{margin-top:26px;display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+  .badge{border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+  .badge b{color:var(--text);font-weight:600}
+  section{padding:56px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:28px;letter-spacing:-.3px;margin-bottom:8px}
+  .sub{color:var(--muted);max-width:680px;margin-bottom:30px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px}
+  .card h3{font-size:16px;margin-bottom:8px}
+  .card p{color:var(--muted);font-size:14.5px}
+  table{width:100%;border-collapse:collapse;font-size:14.5px;margin-top:8px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+  code,.mono{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:13.5px}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto;margin-top:14px}
+  pre code{color:#c9d1d9;line-height:1.55}
+  .note{background:rgba(210,153,34,.08);border:1px solid rgba(210,153,34,.4);border-radius:10px;padding:14px 16px;font-size:14.5px;margin-top:18px}
+  .note b{color:var(--warn)}
+  form{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:26px;max-width:560px}
+  label{display:block;font-size:14px;font-weight:600;margin:16px 0 6px}
+  label:first-of-type{margin-top:0}
+  input[type=email],input[type=text]{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:15px}
+  input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  .consent{display:flex;gap:10px;align-items:flex-start;margin-top:18px;font-size:13.5px;color:var(--muted)}
+  .consent input{margin-top:3px}
+  .consent a{color:var(--accent)}
+  button.submit{margin-top:20px;width:100%;padding:12px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#0d1117;font-weight:700;font-size:15px;cursor:pointer}
+  button.submit:disabled{opacity:.55;cursor:not-allowed}
+  #msg{margin-top:14px;font-size:14px;display:none}
+  #msg.ok{display:block;color:var(--ok)}
+  #msg.err{display:block;color:#f85149}
+  footer{padding:34px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="brand">Replay<span>Pilot</span></div>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#demo">Demo</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#docs">Docs</a>
+      <a href="#beta">Beta</a>
+      <a href="https://github.com/aveca/replaypilot">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <h1>Record a task once.<br>Replay it with <em>semantic steps</em>, not pixel coordinates.</h1>
+    <p class="lede">
+      ReplayPilot is a Windows desktop agent. It watches what you do, stores the
+      steps by name and role in the accessibility tree, and replays them even
+      after the window has moved. It runs on local models. Nothing leaves your machine.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#beta">Join the beta</a>
+      <a class="btn ghost" href="https://github.com/aveca/replaypilot">Read the source</a>
+    </div>
+    <div class="badges">
+      <span class="badge"><b>MIT</b> licence</span>
+      <span class="badge"><b>100%</b> local models</span>
+      <span class="badge"><b>0 $</b> API cost</span>
+      <span class="badge"><b>222</b> tests passing</span>
+    </div>
+  </div>
+</div>
+
+<section id="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="sub">Three ideas, no screen-scraping, no coordinate guessing.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>1 · Record</h3>
+        <p>Show the tool what to do once. Steps are stored as semantic actions —
+        <code>focus_window</code>, <code>click_element</code>, <code>type</code> — with the
+        element's accessibility name and role, not the pixel it happened to be at.</p>
+      </div>
+      <div class="card">
+        <h3>2 · Store</h3>
+        <p>Workflows are plain JSON on disk. Readable, diffable, editable by hand.
+        No proprietary format, no cloud sync.</p>
+      </div>
+      <div class="card">
+        <h3>3 · Replay</h3>
+        <p>At replay time the steps are resolved against the live accessibility
+        tree. Move the window, resize it, change the layout — the button is found
+        by name, not by memory of where it was.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="demo">
+  <div class="wrap">
+    <h2>Demo</h2>
+    <p class="sub">This is the actual workflow used to validate the prototype, reproduced from
+    the recorded JSON. No animation was staged; the run below is the measured one.</p>
+
+    <pre><code>$ .venv\Scripts\python.exe scripts\proof_replay.py
+proof: record -> save -> reload -> replay -> verify
+----------------------------------------------------------------------
+[PASS] 1.  test app launches -- pid=28560
+[PASS] 2.  workflow recorded + saved -- data\workflows\fill_test_form.json
+[PASS] 3.  workflow reloaded from disk -- slug=fill_test_form steps=7 text='REPLAYPROOF-7741'
+[PASS] 4.  app reset before replay -- entry_text=''
+[PASS] 5.  replay executed every step -- 7 steps in 3.59s
+         focus_window  -> focused: ReplayPilot Test App
+         wait          -> waited 500ms
+         click_element -> clicked 'TaskField' at 452,267
+         type          -> pasted 16 chars
+         wait          -> waited 500ms
+         click_element -> clicked 'Submit' at 262,315
+         wait          -> waited 700ms
+[PASS] 6.  final state verified by observation -- entry_text='REPLAYPROOF-7741' submits=1
+...
+13/13 checks passed</code></pre>
+
+    <p class="sub" style="margin-top:22px">Why these checks count as evidence rather than a self-report:</p>
+    <div class="grid">
+      <div class="card"><h3>Verified by the app, not the agent</h3><p>The target application writes its own
+      state file. Verification reads the app's view. A replay that typed into the wrong place cannot satisfy it.</p></div>
+      <div class="card"><h3>Corroborated by a second log</h3><p>The app also writes an event log, and the
+      harness requires it to agree independently with the recorded workflow.</p></div>
+      <div class="card"><h3>Repeatable</h3><p>The field is reset to a provably empty state and the replay is
+      run a second time from scratch.</p></div>
+    </div>
+
+    <table>
+      <thead><tr><th>Measured</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td>Replay of a 7-step workflow</td><td>3.51 s / 3.52 s / 3.59 s across three runs</td></tr>
+        <tr><td>Element lookup + click (UIA)</td><td>included above; no retries needed</td></tr>
+        <tr><td>Local text completion, warm</td><td>1.6 s</td></tr>
+        <tr><td>Test suite</td><td>222 passed, 2 skipped</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <b>What does not work yet, stated plainly:</b> full autonomous Execute mode
+      needs one local model that both accepts images and emits tool calls. On this
+      hardware no single small model does both, so Execute currently runs with a
+      tool-capable model in accessibility mode, and vision runs in Answer/Teach
+      with a separate vision model. This limit is documented, not hidden.
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="wrap">
+    <h2>Privacy and safety</h2>
+    <p class="sub">The tool drives a real mouse and keyboard, so the safety story is part of the product.</p>
+    <div class="grid">
+      <div class="card"><h3>Loopback only</h3><p>Model requests go to
+      <code>http://localhost:11434/v1</code>. Verified by taking a TCP-connection snapshot before and
+      after a full run: no new remote endpoint appeared.</p></div>
+      <div class="card"><h3>Fail-closed focus guard</h3><p>Every keystroke and click is bracketed by an
+      identity check bound to the window's HWND and process. If the expected window is not in front,
+      the run stops. There is no fallback to "whatever is active".</p></div>
+      <div class="card"><h3>Games and credentials are blocked</h3><p>Denylists are keyed on process name as
+      well as window title, so a renamed or titleless game window is still refused.</p></div>
+      <div class="card"><h3>Emergency stop</h3><p>A kill-switch hotkey, plus a failsafe: slam the pointer
+      into the top-left screen corner and automation aborts immediately.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <h2>Documentation</h2>
+    <p class="sub">Written from executed commands, not from the feature list.</p>
+    <div class="grid">
+      <div class="card"><h3><a href="https://github.com/aveca/replaypilot/blob/feat/ollama-local-backend/docs/INSTALL-WINDOWS.md" style="color:var(--accent);text-decoration:none">Install on Windows</a></h3>
+      <p>Prerequisites, model selection with real memory measurements, and why an 18 GB model is impractical on a 16 GB machine.</p></div>
+      <div class="card"><h3><a href="https://github.com/aveca/replaypilot/blob/feat/ollama-local-backend/docs/RUNNING-AND-DIAGNOSTICS.md" style="color:var(--accent);text-decoration:none">Running and diagnostics</a></h3>
+      <p>Start the overlay, read the artifacts, interpret failures, and the two measured Windows quirks worth knowing before recording.</p></div>
+      <div class="card"><h3><a href="https://github.com/aveca/replaypilot/blob/feat/ollama-local-backend/docs/SECURITY-AND-PRIVACY.md" style="color:var(--accent);text-decoration:none">Security and privacy</a></h3>
+      <p>The loopback proof, the guard design, and a disclosed incident where keystrokes reached an unintended window — and what was changed because of it.</p></div>
+      <div class="card"><h3><a href="https://github.com/aveca/replaypilot/blob/feat/ollama-local-backend/docs/PROTOTYPE-VALIDATION.md" style="color:var(--accent);text-decoration:none">Prototype validation</a></h3>
+      <p>Every claim with the command that produced it, classified PASS / FAIL / NOT_PROVEN / BLOCKED.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="beta">
+  <div class="wrap">
+    <h2>Join the beta</h2>
+    <p class="sub">The beta is not open yet. Leave an address and we will tell you when a signed
+    installer exists — nothing else. Unsubscribing is one click, and your address is not shared
+    with anyone.</p>
+
+    <form id="beta-form" novalidate>
+      <label for="email">Email address</label>
+      <input type="email" id="email" name="email" required placeholder="you@example.com" autocomplete="email">
+
+      <label for="usecase">What would you automate? <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+      <input type="text" id="usecase" name="usecase" placeholder="e.g. monthly invoice entry in our ERP">
+
+      <div class="consent">
+        <input type="checkbox" id="consent" required>
+        <span>I agree to receive an email when the beta opens, and I have read the
+        <a href="#privacy">privacy note</a>. No marketing, no third-party sharing, one-click unsubscribe.</span>
+      </div>
+
+      <button class="submit" type="submit" id="submit-btn">Request beta access</button>
+      <div id="msg" role="status"></div>
+    </form>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>ReplayPilot — a fork of <a href="https://github.com/ertugrulakben/lucid">Lucid</a>, MIT licence.</div>
+    <div><a href="https://github.com/aveca/replaypilot">Source</a> · <a href="#privacy">Privacy</a> · <a href="#beta">Beta</a></div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var form = document.getElementById('beta-form');
+  var btn = document.getElementById('submit-btn');
+  var msg = document.getElementById('msg');
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    msg.className = '';
+    msg.textContent = '';
+
+    var email = document.getElementById('email').value.trim();
+    var consent = document.getElementById('consent').checked;
+
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      msg.textContent = 'Please enter a valid email address.';
+      msg.classList.add('err');
+      return;
+    }
+    if (!consent) {
+      msg.textContent = 'Please tick the consent box. We only email you about the beta opening.';
+      msg.classList.add('err');
+      return;
+    }
+
+    // No backend is wired yet: this build stores nothing and sends nothing.
+    // The endpoint will be a first-party service with double opt-in before
+    // the beta opens. Reporting success now would be a lie, so this build
+    // says exactly what it did.
+    btn.disabled = true;
+    msg.textContent =
+      'Signup storage is not wired into this build yet. ' +
+      'Nothing was saved or sent. Follow the GitHub repo for the beta announcement instead.';
+    msg.classList.add('ok');
+  });
+})();
+</script>
+
+</body>
+</html>

@@ -5,7 +5,7 @@ a local Ollama model. Every result below carries one of **PASS**, **FAIL**,
 **NOT_PROVEN** or **BLOCKED**. Nothing here is asserted from documentation: each
 line names the command that produced it.
 
-- Date: 2026-10-17
+- Date: 2026-10-17 (validation session 2 same day, see section 13)
 - Machine: Windows 11, 2560x1440, interactive session 1, 31.6 GB RAM
 - Python 3.11.9, uv 0.12.22, Ollama with OpenAI-compatible endpoint on `:11434/v1`
 
@@ -379,7 +379,7 @@ this validation.**
 | 3 | Local text completion | **PASS** |
 | 4 | Local vision, after fixing the dropped-image defect | **PASS** |
 | 5 | OpenAI tool calling on a local model | **PASS** — `llama3.1:8b` emitted `action: screenshot` |
-| 6 | Execute mode end to end on a local model | **BLOCKED** — needs vision **and** tools in one model; none fits |
+| 6 | Execute mode end to end on a local model | **BLOCKED** → **fixed in code**, pending a consent-gated live run (section 13) |
 | 7 | Record → save → reload → replay → verify | **PASS**, 13/13 |
 | 8 | Replay repeatable and verified by app-side observation | **PASS** |
 | 9 | Controlled failure stops safely | **PASS** |
@@ -387,10 +387,16 @@ this validation.**
 | 11 | No secrets in logs or artifacts | **PASS** |
 | 12 | No paid API in use, 0 $ cost | **PASS** |
 | 13 | No input sent to a game window (after the fix) | **PASS** |
-| 14 | Upstream test suite unaffected | **PASS**, 191 passed |
+| 14 | Upstream test suite unaffected | **PASS**, 222 passed |
 | 15 | Input never escaped to the wrong window | **FAIL once**, then **PASS** after the guard |
 | 16 | Local vision usable in Answer mode | **PASS** after fixing the dropped-image defect |
-| 17 | Local tool calling usable in Execute mode | **PASS** for the capability, **BLOCKED** for the loop |
+| 17 | Local tool calling usable in Execute mode | **PASS** for the capability |
+| 18 | Guard refuses a game window regardless of its title | **PASS** — process-name denylist (session 2) |
+| 19 | Guard bound to HWND+PID, refuses a same-titled impostor | **PASS** (session 2) |
+| 20 | Guard cannot be pointed at a foreign process's window | **PASS** — ownership rule (session 2) |
+| 21 | Desktop tests never steal focus uninvited | **PASS** — consent gate (session 2) |
+| 22 | Execute honours `capture.mode` | **PASS** — 10 regression tests (session 2) |
+| 23 | No screenshot sent to the model in a11y_only mode | **PASS** (session 2) |
 
 **Mission criterion.** A simple workflow was genuinely recorded, saved,
 reloaded, replayed and verified against real observation, twice. The obstacles
@@ -446,6 +452,113 @@ Two further items, in order:
 2. Upstream the two executor defects from section 7 and the dropped-image
    defect from section 3. All three affect any user of the upstream project,
    not only this fork.
+
+---
+
+## 13. Session 2 — same day: guard hardening, Execute fix, consent gate
+
+Session 1 proved record/replay and found the dropped-image defect. Session 2
+closed the safety hole from the WoW incident and removed the structural
+Execute blocker. Everything below was verified on the same machine, with the
+game still running.
+
+### 13.1 The guard was rebuilt, not patched
+
+The session-1 guard keyed authorization on a **title substring** and recognised
+the game only by title. Three holes followed from that, all now closed
+(`scripts/window_guard.py`, commit `0d6a996`):
+
+| Hole | Consequence | Fix |
+|---|---|---|
+| Title-substring identity | "the window we expect" and "the window in front" were not provably the same window | Authorization is bound to a concrete **(HWND, PID)** pair |
+| Game recognised by title only | A renamed or titleless game window passed | Denylist also keyed on **process name** — `wowclassic` is refused whatever its window is called |
+| One check before the action | Focus could change between the check and the input, which is exactly how the incident happened | Check before **and** after every input action; a mid-action steal becomes a reported refusal |
+| No ownership rule | The guard could be pointed at any window | `authorize()` requires an explicit `expected_pid`; a window from another process is refused |
+
+Measured refusal, read-only, while the game held the foreground:
+
+```text
+foreground hwnd=14355060 pid=19476 title='World of Warcraft'
+process='wowclassic' verdict=GAME_TITLE(world of warcraft),GAME_PROCESS(wowclassic)
+```
+
+**21 tests** in `tests/unit/test_window_guard.py`, zero input emitted — the
+module's input switch is off for the whole file, and two tests assert
+`emitted == []` so a regression that let input escape fails the suite. One test
+extraction reads Lucid's own dispatch table and fails if the guard's
+classification of actions ever drifts from what Lucid can actually dispatch.
+
+That drift check earned its keep immediately: `click_element`,
+`scroll_into_view`, `file_dialog_paste` and `solve_captcha` all emit real input
+but were absent from the first input list, meaning they would have gone through
+the unguarded path.
+
+### 13.2 Execute mode: the structural blocker is removed
+
+`agent/execute_mode.py` attached `image_block()` unconditionally at three sites
+(first turn, follow-up turns, and each tool_result), so a text-only model was
+sent a 16x16 blank frame and rejected the whole request — even with
+`capture.mode: a11y_only` configured precisely to avoid images.
+
+All three sites now honour `capture.mode` (commit `898f948`). Measured with a
+capturing fake provider:
+
+```text
+vision mode, turn 0:     [image w=64 h=48, text]        <- live screenshot kept
+a11y_only mode, turn 0:  [text]                         <- no image, a11y tree kept
+```
+
+**10 tests** in `tests/unit/test_execute_capture_mode.py`: a11y_only and
+cheap_mode attach nothing, vision keeps the screenshot and reference images in
+the original order, the blank placeholder is never sent, a genuine 32x24
+screenshot is not over-filtered.
+
+One over-filter was found and fixed while writing those tests: the first draft
+treated any image 32 pixels wide as blank, which would have silently dropped a
+real 32x24 capture. The predicate now recognises exactly `ScreenshotGrabber.blank()`
+(16x16).
+
+### 13.3 Model split verified with the current config
+
+`scripts/probe_ollama.py`, run against the live settings:
+
+| Model | Role | Text | Vision | Tools |
+|---|---|---|---|---|
+| `qwen2.5vl:3b` | Answer / Teach | PASS, 7.0 s | **PASS — `Blue`** | FAIL, HTTP 400 (expected) |
+| `llama3.1:8b` | Execute | PASS, 12.0 s | FAIL, HTTP 400 (expected) | **PASS — `action: screenshot`** |
+
+Each model covers the other's gap, and Execute no longer needs vision. This is
+the configuration shipped in `data/settings.yaml`.
+
+### 13.4 Desktop tests can no longer steal focus uninvited
+
+Two runs were started during session 2 without asking, and one stole the
+foreground while the user was using the machine. All three desktop scripts now
+refuse to run unless `REPLAYPILOT_ALLOW_INPUT=1` is set (commit `e854846`):
+
+```text
+proof_replay => REFUSED: this test raises a window to the foreground and types in it.
+guard_e2e    => REFUSED: this test raises a window to the foreground and clicks in it.
+execute_e2e  => REFUSED: this test raises a window to the foreground and types in it.
+```
+
+They exit 2 before launching any process or touching any window.
+
+### 13.5 The one live run still owed
+
+The guard e2e ran to completion in session 2 (**8/8**, real input, test app
+only). The Execute e2e — the model actually driving the test app — is written
+and unit-validated but not yet run live, because it needs roughly two minutes
+of foreground and the user's explicit go-ahead. It is consent-gated and will
+not run without it.
+
+### 13.6 Suite status
+
+```text
+222 passed, 2 skipped
+```
+
+Upstream 186 + local backend 5 + window guard 21 + execute capture mode 10.
 
 ---
 
