@@ -208,6 +208,61 @@ def test_every_input_action_name_is_classified(restore):
         assert name in wg._INPUT_ACTION_NAMES
 
 
+def test_semantic_actions_that_emit_input_are_guarded(restore):
+    """The easy-to-miss ones: they look semantic but move the real input.
+
+    Each of these was absent from the guard's input list at some point, which
+    would have let a real click or keystroke through the read-only path.
+    """
+    for name in (
+        "click_element",
+        "scroll_into_view",
+        "file_dialog_paste",
+        "solve_captcha",
+    ):
+        assert name in wg._INPUT_ACTION_NAMES, f"{name} emits input but is unguarded"
+        assert name not in wg._READONLY_ACTION_NAMES
+
+
+def test_readonly_actions_stay_readonly(restore):
+    for name in ("wait", "screenshot", "focus_window", "run_shell"):
+        assert name in wg._READONLY_ACTION_NAMES
+        assert name not in wg._INPUT_ACTION_NAMES
+
+
+def test_input_and_readonly_lists_are_disjoint(restore):
+    assert not (wg._INPUT_ACTION_NAMES & wg._READONLY_ACTION_NAMES)
+
+
+def test_every_action_lucid_dispatches_is_classified(restore):
+    """Guard the lists against drift in Lucid's own dispatch table.
+
+    Reads src/lucid/executor/actions.py and extracts the `if name == "..."`
+    comparisons in Actions.run. Any action Lucid can dispatch must appear in
+    exactly one of the two guard lists, otherwise it would fall through to an
+    unclassified path.
+    """
+    import re
+
+    src = (Path(__file__).resolve().parents[2] / "src" / "lucid" / "executor" / "actions.py")
+    text = src.read_text(encoding="utf-8")
+
+    start = text.index("    def run(self, action: ActionBlock)")
+    end = text.index("    def _move(", start)
+    body = text[start:end]
+
+    dispatched: set[str] = set(re.findall(r'name\s*==\s*"([^"]+)"', body))
+    for group in re.findall(r"name\s+in\s*\(([^)]*)\)", body):
+        dispatched.update(re.findall(r'"([^"]+)"', group))
+
+    classified = wg._INPUT_ACTION_NAMES | wg._READONLY_ACTION_NAMES
+    unclassified = dispatched - classified
+    assert not unclassified, (
+        f"Lucid dispatches actions the guard does not classify: {sorted(unclassified)}. "
+        f"Add each to _INPUT_ACTION_NAMES or _READONLY_ACTION_NAMES."
+    )
+
+
 # --------------------------------------------------------------------------
 # No fallback to the active window
 # --------------------------------------------------------------------------
