@@ -266,6 +266,43 @@ class ExecuteMode:
                 self._kill_switch_unreg = None
             self._record_if_enabled(budget)
 
+    def _may_attach_image(self, snapshot: ContextSnapshot) -> bool:
+        """Whether a screenshot may be sent to the model on this turn.
+
+        ``capture.mode`` is honoured here, and this is the only place in
+        Execute mode that decides it. Previously every turn did
+        ``[self.provider.image_block(snapshot.image)]`` unconditionally, so a
+        text-only local model was asked to handle a blank image and rejected
+        the whole request with HTTP 400:
+
+            Multimodal data provided, but model does not support multimodal
+            requests.
+
+        even when ``capture.mode: a11y_only`` had been configured precisely to
+        avoid sending images. The accessibility tree is already included in
+        the prompt text by ``_initial_user_text``, so a text-only model has
+        everything it needs when we skip the image.
+
+        Returns True for ``vision`` mode, for ``hybrid`` when the snapshot
+        actually captured something, and False for ``a11y_only``,
+        ``capture.cheap_mode``, or a blank screenshot.
+        """
+        capture_cfg = getattr(self.settings, "capture", None)
+        mode = (getattr(capture_cfg, "mode", "vision") or "vision").lower()
+        if bool(getattr(capture_cfg, "cheap_mode", False)):
+            return False
+        if mode == "a11y_only":
+            return False
+        image = getattr(snapshot, "image", None)
+        if image is None:
+            return False
+        # ScreenshotGrabber.blank() returns a 16x16 black frame when a capture
+        # was skipped. Attaching it costs tokens and trips text-only models, so
+        # treat exactly that placeholder as "no image".
+        if (getattr(image, "width", 0), getattr(image, "height", 0)) == (16, 16):
+            return False
+        return True
+
     def _loop(
         self,
         prompt: str,
@@ -278,9 +315,11 @@ class ExecuteMode:
             self._current_goal = prompt
             snapshot = stale_snapshot
             self._target_app = _snapshot_app(snapshot)
-            content: list = [self.provider.image_block(snapshot.image)]
-            for ref_img in attachments:
-                content.append(self.provider.image_block(ref_img))
+            content: list = []
+            if self._may_attach_image(snapshot):
+                content.append(self.provider.image_block(snapshot.image))
+                for ref_img in attachments:
+                    content.append(self.provider.image_block(ref_img))
             content.append(
                 self.provider.text_block(
                     self._initial_user_text(prompt, snapshot, attachment_count=len(attachments))
@@ -291,9 +330,11 @@ class ExecuteMode:
             # Follow-up: re-capture the desktop NOW (old code reused a stale
             # snapshot captured before the user's new prompt).
             snapshot = ContextSnapshot.capture(self.settings)
-            follow_up: list = [self.provider.image_block(snapshot.image)]
-            for ref_img in attachments:
-                follow_up.append(self.provider.image_block(ref_img))
+            follow_up: list = []
+            if self._may_attach_image(snapshot):
+                follow_up.append(self.provider.image_block(snapshot.image))
+                for ref_img in attachments:
+                    follow_up.append(self.provider.image_block(ref_img))
             attach_note = (
                 f"\n\n[{len(attachments)} reference image(s) attached — match "
                 "their intent on the current desktop.]"
@@ -508,13 +549,13 @@ class ExecuteMode:
                         annotated += f"\n[captcha] {captcha_note}"
                         captcha_hit = captcha_note
 
+                observed = [self.provider.text_block(annotated)]
+                if self._may_attach_image(new_snapshot):
+                    observed.append(self.provider.image_block(new_snapshot.image))
                 tool_results.append(
                     self.provider.tool_result_block(
                         action.id,
-                        [
-                            self.provider.text_block(annotated),
-                            self.provider.image_block(new_snapshot.image),
-                        ],
+                        observed,
                     )
                 )
                 self._transcript.append(f"{action.action}: {annotated[:200]}")
